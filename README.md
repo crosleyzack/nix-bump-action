@@ -1,5 +1,9 @@
 # nix-bump-action
 
+[![dependabot](https://github.com/crosleyzack/nix-bump-action/actions/workflows/dependabot/dependabot-updates/badge.svg)](https://github.com/crosleyzack/nix-bump-action/actions/workflows/dependabot/dependabot-updates)
+[![license](https://img.shields.io/github/license/crosleyzack/nix-bump-action?color=blue)](https://github.com/crosleyzack/nix-bump-action/blob/main/LICENSE)
+[![Rust CI](https://github.com/crosleyzack/nix-bump-action/actions/workflows/ci.yaml/badge.svg)](https://github.com/crosleyzack/nix-bump-action/actions/workflows/ci.yaml)
+
 A GitHub Action that bumps nixpkgs and home-manager release pins in your `*.nix` files.
 
 It rewrites files and nothing else.
