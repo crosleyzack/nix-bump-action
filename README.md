@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: zackary-crosley/nix-bump-action@v1
+      - uses: crosleyzack/nix-bump-action@v0.1.0
         with:
           paths: nix
 
