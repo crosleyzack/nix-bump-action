@@ -1,0 +1,49 @@
+{
+  "name": "rust and opencode",
+  "image": "mcr.microsoft.com/devcontainers/rust:1-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "containerEnv": {
+    // Leave empty to install the newest opencode. Set an exact version
+    // (for example "1.2.27") to pin it.
+    "OPENCODE_VERSION": ""
+  },
+  "remoteEnv": {
+    // The opencode installer puts the binary in $HOME/.opencode/bin.
+    "PATH": "${containerEnv:PATH}:/home/vscode/.opencode/bin",
+    // Read the configuration from this repository, not from the host.
+    "OPENCODE_CONFIG": "${containerWorkspaceFolder}/.devcontainer/opencode.json"
+  },
+  // Docker makes missing bind-mount sources as root, which the container user
+  // cannot write. Make the directory on the host first.
+  "initializeCommand": "mkdir -p \"${localEnv:HOME}/.local/share/opencode\"",
+  "mounts": [
+    // opencode credentials from `opencode auth login`: auth.json.
+    // The bind mount keeps the login across container rebuilds.
+    "source=${localEnv:HOME}/.local/share/opencode,target=/home/vscode/.local/share/opencode,type=bind,consistency=cached",
+    // Keep the cargo registry and the build output out of the workspace bind mount.
+    "source=wallpaper-cargo-registry,target=/usr/local/cargo/registry,type=volume",
+    "source=wallpaper-target,target=${containerWorkspaceFolder}/target,type=volume"
+  ],
+  // The three entries run in parallel.
+  "postCreateCommand": {
+    // Podman/Docker creates the parents of the opencode bind mount (~/.local, ~/.local/share) as root.
+    // Reclaim them so opencode can write its state dir.
+    "permissions": "sudo mkdir -p /home/vscode/.local/state && sudo chown vscode:vscode /home/vscode/.local /home/vscode/.local/share /home/vscode/.local/state",
+    // Docker makes new named volumes with root as the owner.
+    "rust": "sudo chown -R vscode:vscode /usr/local/cargo/registry ${containerWorkspaceFolder}/target && cargo fetch --locked",
+    "opencode": "curl -fsSL https://opencode.ai/install | VERSION=${OPENCODE_VERSION} bash -s -- --no-modify-path"
+  },
+  "customizations": {
+    "vscode": {
+      // The rust feature in the base image already supplies rust-analyzer,
+      // even-better-toml, and vscode-lldb.
+      "settings": {
+        "rust-analyzer.check.command": "clippy",
+        "editor.formatOnSave": true
+      }
+    }
+  },
+  "remoteUser": "vscode"
+}

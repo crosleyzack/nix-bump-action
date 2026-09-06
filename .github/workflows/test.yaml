@@ -1,0 +1,175 @@
+name: test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  behavior:
+    name: End-to-end behavior
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Write fixtures
+        run: |
+          set -euo pipefail
+          mkdir -p fix/main/host fix/paths/nix fix/paths/vendor fix/idem fix/dry
+
+          cat >fix/main/flake.nix <<'EOF'
+          {
+            inputs = {
+              nixpkgs.url = "github:nixos/nixpkgs/nixos-20.09";
+              home-manager.url = "github:nix-community/home-manager/release-20.09";
+            };
+          }
+          EOF
+          # stateVersion and nixos-unstable must both survive untouched.
+          cat >fix/main/host/configuration.nix <<'EOF'
+          {
+            system.stateVersion = "20.09";
+            x = "github:nixos/nixpkgs/nixos-unstable";
+          }
+          EOF
+          # A -small suffix pin is bumped with its suffix preserved, and a pin
+          # ahead of upstream is left alone.
+          cat >fix/main/other.nix <<'EOF'
+          {
+            a = "github:nixos/nixpkgs/nixos-21.11-small";
+            b = "github:nixos/nixpkgs/nixos-99.11";
+          }
+          EOF
+
+          printf '{ x = "github:nixos/nixpkgs/nixos-20.09"; }\n' >fix/paths/nix/a.nix
+          printf '{ x = "github:nixos/nixpkgs/nixos-20.09"; }\n' >fix/paths/vendor/skip.nix
+          printf '{ x = "github:nixos/nixpkgs/nixos-20.09"; }\n' >fix/paths/named.conf
+          printf '{ x = "github:nixos/nixpkgs/nixos-20.09"; }\n' >fix/idem/a.nix
+          printf '{ x = "github:nixos/nixpkgs/nixos-20.09"; }\n' >fix/dry/a.nix
+
+      - name: Bump
+        id: bump
+        uses: ./
+        with:
+          paths: fix/main
+
+      - name: Assert the pins moved and nothing else did
+        env:
+          TARGET: ${{ steps.bump.outputs.target }}
+          LATEST: ${{ steps.bump.outputs.latest-home-manager }}
+          BUMPED: ${{ steps.bump.outputs.bumped }}
+          VERSIONS: ${{ steps.bump.outputs.versions-bumped }}
+          CHANGED: ${{ steps.bump.outputs.files-changed }}
+        run: |
+          set -euo pipefail
+          tail -n +1 fix/main/flake.nix fix/main/host/configuration.nix fix/main/other.nix
+
+          [[ "$BUMPED" == 'true' ]] || { echo "expected bumped=true"; exit 1; }
+          [[ -n "$TARGET" ]] || { echo "expected a target"; exit 1; }
+          # The target is home-manager's newest release, so these agree.
+          [[ "$TARGET" == "$LATEST" ]] || { echo "target != latest-home-manager"; exit 1; }
+          [[ "$VERSIONS" == '20.09,21.11' ]] || { echo "bad versions: $VERSIONS"; exit 1; }
+
+          # Both patterns landed on the target.
+          grep -q "github:nixos/nixpkgs/nixos-${TARGET}"                fix/main/flake.nix
+          grep -q "github:nix-community/home-manager/release-${TARGET}" fix/main/flake.nix
+
+          # The -small suffix is preserved through the bump.
+          grep -q "github:nixos/nixpkgs/nixos-${TARGET}-small" fix/main/other.nix
+
+          # Never walked backwards, and a versionless channel is skipped.
+          grep -q 'nixos-99\.11'  fix/main/other.nix
+          grep -q 'nixos-unstable' fix/main/host/configuration.nix
+
+          # stateVersion is out of scope.
+          grep -q 'stateVersion = "20\.09"' fix/main/host/configuration.nix
+
+          # configuration.nix had nothing bumpable, so it must not be listed.
+          grep -q 'configuration.nix' <<<"$CHANGED" &&
+            { echo "configuration.nix should not be listed"; exit 1; }
+          echo OK
+
+      - name: Bump an explicit path list
+        uses: ./
+        with:
+          paths: |
+            fix/paths/nix
+            fix/paths/named.conf
+
+      - name: Assert only the listed paths moved
+        run: |
+          set -euo pipefail
+          # A directory is walked, and a named file is honoured whatever its
+          # extension.
+          grep -q 'nixos-20\.09' fix/paths/nix/a.nix &&
+            { echo "listed directory was not bumped"; exit 1; }
+          grep -q 'nixos-20\.09' fix/paths/named.conf &&
+            { echo "named file was not bumped"; exit 1; }
+          # An unlisted directory is untouched.
+          grep -q 'nixos-20\.09' fix/paths/vendor/skip.nix ||
+            { echo "unlisted directory was bumped"; exit 1; }
+          echo OK
+
+      - name: Second run is a no-op
+        id: again
+        uses: ./
+        with:
+          paths: fix/idem
+
+      - name: Third run reports nothing to do
+        id: third
+        uses: ./
+        with:
+          paths: fix/idem
+
+      - env:
+          FIRST: ${{ steps.again.outputs.bumped }}
+          SECOND: ${{ steps.third.outputs.bumped }}
+        run: |
+          [[ "$FIRST" == 'true' ]] || { echo "first run should bump"; exit 1; }
+          [[ "$SECOND" == 'false' ]] || { echo "second run should be a no-op"; exit 1; }
+          echo OK
+
+      - name: Dry run
+        id: dry
+        uses: ./
+        with:
+          paths: fix/dry
+          dry-run: true
+
+      - env:
+          BUMPED: ${{ steps.dry.outputs.bumped }}
+        run: |
+          [[ "$BUMPED" == 'true' ]] || { echo "dry run should report bumped"; exit 1; }
+          grep -q 'nixos-20\.09' fix/dry/a.nix ||
+            { echo "dry run must not write"; exit 1; }
+          echo OK
+
+      - name: A path that does not exist is an error
+        id: missing
+        continue-on-error: true
+        uses: ./
+        with:
+          paths: fix/does-not-exist
+
+      - env:
+          OUTCOME: ${{ steps.missing.outcome }}
+        run: |
+          [[ "$OUTCOME" == 'failure' ]] ||
+            { echo "expected failure, got '$OUTCOME'"; exit 1; }
+          echo OK
+
+      - name: A tree with nothing to bump reports bumped=false
+        id: noop
+        uses: ./
+        with:
+          paths: .github
+
+      - env:
+          BUMPED: ${{ steps.noop.outputs.bumped }}
+        run: |
+          [[ "$BUMPED" == 'false' ]] || { echo "expected bumped=false"; exit 1; }
+          echo OK

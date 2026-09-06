@@ -1,0 +1,25 @@
+[package]
+name = "nix-bump"
+version = "0.1.0"
+edition = "2021"
+description = "Bump nixpkgs and home-manager release pins in *.nix files"
+license = "Apache-2.0"
+repository = "https://github.com/crosleyzack/nix-bump-action"
+
+# The release-pin patterns are fixed, so matching is hand-rolled rather than
+# pulling in `regex`, which would dominate build time on every action run.
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.6", features = ["derive"] }
+env_logger = { version = "0.11", default-features = false }
+log = "0.4"
+walkdir = "2.5.0"
+
+[profile.release]
+opt-level = "s"
+strip = true
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

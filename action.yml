@@ -1,0 +1,103 @@
+name: 'Bump Nix release pins'
+author: 'Zackary Crosley'
+description: 'Find nixpkgs and home-manager release pins in *.nix files and bump them to the newest NixOS release'
+branding:
+  icon: arrow-up-circle
+  color: blue
+
+# This action only rewrites files. Committing, re-locking, and opening a PR are
+# left to whatever you compose it with -- normally
+# DeterminateSystems/update-flake-lock, which re-locks the refs this rewrites
+# and opens the PR itself. See the README.
+inputs:
+  paths:
+    description: >
+      Newline-separated files and directories to bump. Directories are searched
+      recursively for *.nix; files are taken as given. Defaults to the whole
+      workspace.
+    required: false
+    default: '.'
+  target-version:
+    description: >
+      Bump to this release (XX.YY) instead of discovering the newest one.
+      Skips the upstream lookup.
+    required: false
+    default: ''
+  dry-run:
+    description: 'Report what would change without writing files.'
+    required: false
+    default: 'false'
+  home-manager-repo:
+    description: 'Repository to read release-* branches from.'
+    required: false
+    default: 'nix-community/home-manager'
+
+outputs:
+  latest-home-manager:
+    description: 'Newest release-XX.YY branch found upstream.'
+    value: ${{ steps.bump.outputs.latest-home-manager }}
+  target:
+    description: 'Release the pins were moved to.'
+    value: ${{ steps.bump.outputs.target }}
+  bumped:
+    description: '"true" when at least one file changed.'
+    value: ${{ steps.bump.outputs.bumped }}
+  files-changed:
+    description: 'Newline-separated list of rewritten files.'
+    value: ${{ steps.bump.outputs.files-changed }}
+  versions-bumped:
+    description: 'Comma-separated list of the old versions that were replaced.'
+    value: ${{ steps.bump.outputs.versions-bumped }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Build nix-bump
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        if ! command -v cargo >/dev/null 2>&1; then
+          echo "::error::cargo is not on PATH; add dtolnay/rust-toolchain before this action"
+          exit 1
+        fi
+        # No --offline: clap and walkdir come from crates.io. --locked keeps the
+        # committed Cargo.lock authoritative.
+        cargo build --release --locked \
+          --manifest-path "${ACTION_PATH}/Cargo.toml"
+
+    - name: Scan and bump Nix release pins
+      id: bump
+      shell: bash
+      env:
+        # Inputs go through the environment rather than inline ${{ }} so that
+        # nothing is spliced into the script body before bash parses it.
+        ACTION_PATH: ${{ github.action_path }}
+        PATHS: ${{ inputs.paths }}
+        TARGET_VERSION: ${{ inputs.target-version }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        HOME_MANAGER_REPO: ${{ inputs.home-manager-repo }}
+      run: |
+        set -euo pipefail
+
+        # Build argv as an array so a path containing spaces stays one argument.
+        args=()
+        while IFS= read -r path; do
+          [ -n "${path}" ] && args+=( "${path}" )
+        done <<<"${PATHS}"
+
+        if [ "${#args[@]}" -eq 0 ]; then
+          echo "::error::paths is empty"
+          exit 1
+        fi
+
+        args+=( --home-manager-repo "${HOME_MANAGER_REPO}" )
+        if [ -n "${TARGET_VERSION}" ]; then
+          args+=( --target-version "${TARGET_VERSION}" )
+        fi
+        if [ "${DRY_RUN}" = 'true' ]; then
+          args+=( --dry-run )
+        fi
+
+        "${ACTION_PATH}/target/release/nix-bump" "${args[@]}"
